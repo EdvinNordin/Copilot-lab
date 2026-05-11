@@ -3,7 +3,8 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  password?: string;
+  /** bcrypt hash of the user's password — never expose this in responses */
+  passwordHash?: string;
   address?: Address;
 }
 

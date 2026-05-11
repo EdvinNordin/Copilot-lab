@@ -1,15 +1,17 @@
 import { Router, Request, Response } from "express";
+import bcrypt from "bcrypt";
 import { validateEmail } from "../utils/helpers";
 import { User } from "../types/types";
 
 const router = Router();
+const SALT_ROUNDS = 12;
 
 // In-memory user storage
 const users: User[] = [];
 let userIdCounter = 1;
 
 // POST /api/auth/register - register a new user
-router.post("/register", (req: Request, res: Response) => {
+router.post("/register", async (req: Request, res: Response) => {
   const { name, email, password } = req.body as {
     name?: string;
     email?: string;
@@ -37,19 +39,23 @@ router.post("/register", (req: Request, res: Response) => {
     return res.status(409).json({ error: "Email already registered" });
   }
 
-  // In a real application, always hash passwords before storing (e.g. using bcrypt)
+  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
   const newUser: User = {
     id: String(userIdCounter++),
     name,
     email,
+    passwordHash,
   };
 
   users.push(newUser);
-  res.status(201).json({ user: newUser });
+
+  // Never return the passwordHash in the response
+  res.status(201).json({ user: { id: newUser.id, name: newUser.name, email: newUser.email } });
 });
 
 // POST /api/auth/login - log in a user
-router.post("/login", (req: Request, res: Response) => {
+router.post("/login", async (req: Request, res: Response) => {
   const { email, password } = req.body as { email?: string; password?: string };
 
   if (!email || !password) {
@@ -61,11 +67,18 @@ router.post("/login", (req: Request, res: Response) => {
   }
 
   const user = users.find((u) => u.email === email);
-  if (!user) {
+
+  // Use bcrypt.compare even when user is not found (via a dummy hash) to prevent
+  // timing-based user enumeration attacks
+  const dummyHash = "$2b$12$invalidhashfortimingprotectiononly000000000000000000000";
+  const hashToCompare = user?.passwordHash ?? dummyHash;
+  const passwordMatch = await bcrypt.compare(password, hashToCompare);
+
+  if (!user || !passwordMatch) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  // In a real application, compare hashed passwords and issue a JWT
+  // TODO: issue a signed JWT here instead of returning a plain userId
   res.json({ message: "Login successful", userId: user.id });
 });
 

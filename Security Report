@@ -1,0 +1,153 @@
+Security Review — The Daily Harvest API
+CRITICAL
+C1 — Passwords stored in plain text
+File: auth.ts:41-47
+Severity: Critical
+
+The password is silently discarded after validation and never stored — meaning login cannot verify it either. The login handler finds the user by email alone and grants access to anyone who knows a registered email address.
+
+Fix:
+
+Test cases to add:
+
+Login with correct password → 200
+Login with wrong password → 401
+Verify passwordHash is never returned in any response body
+C2 — No session token issued on login
+File: auth.ts:66-68
+Severity: Critical
+
+A raw userId is returned with no cryptographic token. Any client that receives or guesses a userId can use it to impersonate any user, since no route validates identity after login.
+
+Fix: Issue a signed JWT with short expiry:
+
+C3 — All mutating routes are completely unauthenticated
+Files: src/routes/cart.ts, src/routes/products.ts, src/routes/reviews.ts
+Severity: Critical
+
+POST/PUT/DELETE /api/products, POST /api/cart/checkout, and POST /api/reviews/:id require no identity. Any anonymous caller can add products, clear other users' carts, or post fake reviews.
+
+Fix: Create a JWT middleware and apply it to all mutating routes:
+
+HIGH
+H1 — Cart is global, not per-user
+File: cart.ts:9
+Severity: High
+
+Every user sees and modifies the same cart. User A's checkout clears User B's items. This is a broken access control violation — OWASP A01:2021.
+
+Fix: Key carts by user ID from the JWT:
+
+H2 — Wildcard CORS allows any origin
+File: app.ts:11
+Severity: High
+
+This permits cross-origin requests from any domain, enabling CSRF-like attacks from malicious sites.
+
+Fix:
+
+H3 — No security HTTP headers (missing helmet)
+File: src/app.ts
+Severity: High
+
+No Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, or Strict-Transport-Security headers are set.
+
+Fix:
+
+H4 — lodash 4.17.20 — known vulnerability in devDependencies
+File: package.json:38
+Severity: High
+
+lodash@4.17.20 has a known prototype pollution vulnerability (CVE-2021-23337). It's listed as a devDependency with no import in any source file — it appears unused.
+
+Fix: Remove it entirely:
+
+H5 — No rate limiting on authentication endpoints
+File: src/routes/auth.ts
+Severity: High
+
+POST /api/auth/login and /register have no rate limit. An attacker can brute-force passwords or enumerate email addresses without restriction.
+
+Fix:
+
+MEDIUM
+M1 — User enumeration via distinct error messages
+File: auth.ts:64-67
+
+The 409 on /register confirms whether an email exists. An attacker can enumerate valid accounts.
+
+Fix: Return 200 with a generic message on register regardless:
+
+M2 — No input length limits — DoS via large payloads
+Files: All routes
+Severity: Medium
+
+express.json() accepts arbitrarily large bodies. A caller can POST a name field that is megabytes long, exhausting memory.
+
+Fix:
+
+M3 — reviews.ts accepts unbounded free-text without length validation
+File: reviews.ts:23-28
+
+author and comment are stored with no length cap. Malicious content (very long strings, control characters) can be stored and later reflected to other clients.
+
+Fix:
+
+M4 — PUT /api/products/:id allows mass assignment
+File: products.ts:63-65
+
+The entire req.body is spread onto the product. A caller can inject unexpected fields (e.g. reviews, internal flags) directly into the stored object.
+
+Fix: Explicitly allowlist accepted update fields:
+
+M5 — orderId is predictable (Date.now())
+File: cart.ts:97
+
+Timestamps are guessable. Downstream systems relying on this as a unique or secret identifier are vulnerable to enumeration.
+
+Fix: Use a cryptographically random ID:
+
+LOW
+L1 — No security event logging
+Severity: Low
+
+Auth failures, invalid tokens, and validation rejections produce no log entries. There is no way to detect brute-force attempts or audit suspicious activity.
+
+Fix: Add structured logging at minimum on:
+
+Failed login attempts (email, IP, timestamp — never password)
+JWT validation failures
+Any 4xx on auth routes
+L2 — JWT_SECRET has no enforcement
+Severity: Low
+
+When JWT is added, process.env.JWT_SECRET must be validated at startup — not silently defaulted to undefined which would cause jwt.verify to throw on every request.
+
+Fix:
+
+L3 — No package-lock.json
+Severity: Low
+
+No lockfile means npm install resolves unpinned ranges (^4.18.2) differently at each install — supply chain risk.
+
+Fix:
+
+Summary
+ID	Title	Severity
+C1	Passwords stored/compared in plain text	Critical
+C2	No token issued on login	Critical
+C3	All mutating routes unauthenticated	Critical
+H1	Cart is global (broken access control)	High
+H2	Wildcard CORS	High
+H3	No security headers (no helmet)	High
+H4	Vulnerable unused lodash dependency	High
+H5	No rate limiting on auth endpoints	High
+M1	User enumeration via 409 on register	Medium
+M2	No request body size limit (DoS)	Medium
+M3	Unbounded free-text in reviews	Medium
+M4	Mass assignment on PUT /products	Medium
+M5	Predictable orderId	Medium
+L1	No security event logging	Low
+L2	JWT_SECRET not validated at startup	Low
+L3	No lockfile	Low
+Omegapoint verification(s): V3.F, V8.A, V16.E (https://securityblog.omegapoint.se/en/cis-control-verifications-cloud-native-applications)
